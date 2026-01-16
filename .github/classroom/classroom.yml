@@ -1,0 +1,34 @@
+name: Autograding
+
+on: [push, pull_request, repository_dispatch]
+
+permissions:
+  checks: write
+  actions: read
+  contents: read
+
+jobs:
+  grade:
+    name: Проверка домашнего задания
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pytest
+
+      - name: Проверка наличия файлов
+        run: |
+          ls tests/test_calculator.py tests/test_string_utils.py README.md
+
+      - name: Запуск тестов и генерация отчёта
+        run: python tools/generate_summary.py
+        env:
+          GITHUB_STEP_SUMMARY: ${{ github.step_summary }}

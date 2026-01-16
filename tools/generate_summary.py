@@ -11,39 +11,50 @@ def run_command(cmd, shell=False):
     return result.stdout.strip(), result.stderr.strip(), result.returncode
 
 def parse_pytest_results(stdout):
-    # Ищем строки вида: test_file.py::test_name PASSED/FAILED
-    pattern = r"^(\S+::\w+)\s+(PASSED|FAILED|ERROR|SKIPPED)$"
+    # Ищем: tests/file.py::test_name PASSED/FAILED (игнорируем всё после)
+    pattern = r"^(tests/[^:]+::\w+)\s+(PASSED|FAILED|ERROR|SKIPPED)"
     matches = re.findall(pattern, stdout, re.MULTILINE)
-    
-    normalized = {}
-    for test_id, status in matches:
-        # Нормализуем путь: если файл без "tests/", добавим
-        if not test_id.startswith("tests/"):
-            parts = test_id.split("::", 1)
-            filename = parts[0]
-            testname = parts[1] if len(parts) > 1 else ""
-            if "/" not in filename:
-                # Предполагаем, что файл лежит в tests/
-                test_id = f"tests/{filename}::{testname}"
-        normalized[test_id] = (status == "PASSED")
-    return normalized
+    return {test_id: (status == "PASSED") for test_id, status in matches}
+
+def check_pytest_ini():
+    ini_path = "pytest.ini"
+    if not os.path.exists(ini_path):
+        return False, "❌ Файл pytest.ini отсутствует"
+
+    with open(ini_path, encoding="utf-8") as f:
+        content = f.read()
+
+    # Ищем секцию [pytest] и маркеры
+    has_math = re.search(r"^\s*math\s*:", content, re.MULTILINE)
+    has_string = re.search(r"^\s*string\s*:", content, re.MULTILINE)
+
+    if has_math and has_string:
+        return True, "✅ pytest.ini содержит маркеры math и string"
+    else:
+        issues = []
+        if not has_math:
+            issues.append("math")
+        if not has_string:
+            issues.append("string")
+        return False, f"❌ В pytest.ini отсутствуют маркеры: {', '.join(issues)}"
 
 def main():
-    # === Шаг 1: Запуск pytest и парсинг результатов ===
     print("🔍 Запуск тестов...")
-    pytest_out, pytest_err, _ = run_command([sys.executable, "-m", "pytest", "-v", "--tb=short"])
+    pytest_out, pytest_err, _ = run_command([sys.executable, "-m", "pytest", "-v", "--tb=short", "--color=no"])
     
     with open("pytest_output.log", "w", encoding="utf-8") as f:
         f.write(pytest_out + "\n" + pytest_err)
 
     results = parse_pytest_results(pytest_out)
 
-    # === Шаг 2: Проверка маркеров через check_markers.py ===
     print("🔍 Проверка маркеров...")
     _, markers_err, markers_code = run_command([sys.executable, "tools/check_markers.py"])
     markers_ok = (markers_code == 0)
 
-    # === Шаг 3: Оценка заданий ===
+    print("🔍 Проверка pytest.ini...")
+    ini_ok, ini_msg = check_pytest_ini()
+
+    # Оценка заданий
     task1_tests = [
         "tests/test_calculator.py::test_add",
         "tests/test_calculator.py::test_subtract",
@@ -61,11 +72,10 @@ def main():
         details = []
         for i, test_id in enumerate(test_list):
             if test_id not in results:
-                details.append(f"❌ Тест не найден")
+                details.append("❌ Тест не найден")
                 continue
             passed = results[test_id]
             if expect_fail_on_last and i == len(test_list) - 1:
-                # Последний тест должен упасть
                 if not passed:
                     score += 10
                     details.append("✅ Упал (ожидаемо)")
@@ -86,9 +96,8 @@ def main():
     total_max = task1_max + task2_max
     percentage = round(total_score / total_max * 100) if total_max > 0 else 0
 
-    # === Шаг 4: Формирование Summary ===
+    # === Формирование Summary ===
     summary = []
-
     summary.append("## 📊 ИТОГОВЫЙ ОТЧЕТ ПО ВСЕМ ЗАДАНИЯМ")
     summary.append("")
     summary.append("### 📈 Сводная таблица")
@@ -96,19 +105,13 @@ def main():
     summary.append("|---------|-------|----------|--------|")
 
     def status_emoji(score, max_score):
-        if score == max_score:
-            return "✅"
-        elif score > 0:
-            return "⚠️"
-        else:
-            return "❌"
+        return "✅" if score == max_score else ("⚠️" if score > 0 else "❌")
 
     summary.append(f"| Задание 1: Калькулятор и тесты | {task1_score} | {task1_max} | {status_emoji(task1_score, task1_max)} |")
     summary.append(f"| Задание 2: Строковые функции и тесты | {task2_score} | {task2_max} | {status_emoji(task2_score, task2_max)} |")
     summary.append(f"| **ВСЕГО** | **{total_score}** | **{total_max}** | **{percentage}%** |")
     summary.append("")
 
-    # Детали по тестам (опционально — можно убрать для краткости)
     summary.append("### 🔍 Детали по тестам")
     summary.append("**Задание 1:**")
     for test, detail in zip(task1_tests, task1_details):
@@ -121,7 +124,6 @@ def main():
         summary.append(f"- `{name}` → {detail}")
     summary.append("")
 
-    # Результат проверки маркеров
     summary.append("### 🏷️ Проверка маркеров (@pytest.mark)")
     if markers_ok:
         summary.append("✅ Найдены маркеры: `@pytest.mark.math`, `@pytest.mark.string`")
@@ -129,34 +131,32 @@ def main():
         summary.append("❌ Маркеры не обнаружены или указаны неверно")
     summary.append("")
 
-    # Найденные файлы
+    summary.append("### 📄 Проверка pytest.ini")
+    summary.append(ini_msg)
+    summary.append("")
+
     summary.append("### 📁 Найденные файлы:")
-    for fname in ["tests/test_calculator.py", "tests/test_string_utils.py", "README.md"]:
+    for fname in ["tests/test_calculator.py", "tests/test_string_utils.py", "README.md", "pytest.ini"]:
         if os.path.exists(fname):
             summary.append(f"✅ `{fname}` — найден")
         else:
             summary.append(f"❌ `{fname}` — отсутствует")
     summary.append("")
 
-    # Итоговая оценка
     summary.append(f"### 🏆 Итоговая оценка: **{total_score} / {total_max}**")
-    if total_score == total_max and markers_ok:
+    if total_score == total_max and markers_ok and ini_ok:
         summary.append("\n🎉 **ПОЗДРАВЛЯЕМ! Все задачи выполнены корректно!**")
     else:
-        summary.append("\n💡 **Рекомендация**: проверьте наличие маркеров и поведение фейлящегося теста.")
+        summary.append("\n💡 **Рекомендация**: проверьте наличие pytest.ini и правильность маркеров.")
 
     summary_text = "\n".join(summary)
-
-    # Вывод в консоль
     print(summary_text)
 
-    # Запись в GitHub Actions Summary (если запущено в CI)
     github_summary = os.getenv("GITHUB_STEP_SUMMARY")
     if github_summary:
         with open(github_summary, "a", encoding="utf-8") as f:
             f.write(summary_text)
     else:
-        # Локально — сохраняем для просмотра
         with open("SUMMARY.md", "w", encoding="utf-8") as f:
             f.write(summary_text)
 

@@ -11,9 +11,22 @@ def run_command(cmd, shell=False):
     return result.stdout.strip(), result.stderr.strip(), result.returncode
 
 def parse_pytest_results(stdout):
-    pattern = r"^(tests/[^:]+::\w+)\s+(PASSED|FAILED|ERROR|SKIPPED)$"
+    # Ищем строки вида: test_file.py::test_name PASSED/FAILED
+    pattern = r"^(\S+::\w+)\s+(PASSED|FAILED|ERROR|SKIPPED)$"
     matches = re.findall(pattern, stdout, re.MULTILINE)
-    return {test_id: (status == "PASSED") for test_id, status in matches}
+    
+    normalized = {}
+    for test_id, status in matches:
+        # Нормализуем путь: если файл без "tests/", добавим
+        if not test_id.startswith("tests/"):
+            parts = test_id.split("::", 1)
+            filename = parts[0]
+            testname = parts[1] if len(parts) > 1 else ""
+            if "/" not in filename:
+                # Предполагаем, что файл лежит в tests/
+                test_id = f"tests/{filename}::{testname}"
+        normalized[test_id] = (status == "PASSED")
+    return normalized
 
 def main():
     # === Шаг 1: Запуск pytest и парсинг результатов ===
